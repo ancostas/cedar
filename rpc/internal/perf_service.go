@@ -106,6 +106,15 @@ func (srv *perfService) AttachRollups(ctx context.Context, rollupData *RollupDat
 		return nil, newRPCError(codes.InvalidArgument, errors.Wrapf(err, "problem attaching rollup data for perf result '%s'", record.ID))
 	}
 
+	id := model.TimeSeriesId{
+		Project:     result.Info.Project,
+		Variant:     result.Info.Variant,
+		Task:        result.Info.TaskName,
+		Test:        result.Info.TestName,
+		Measurement: rollup.Name,
+	}
+	processingJob := NewRecalculateChangePointsJob(id)
+	src.enc.queue.Put(ctx, processingJob), "problem putting signal processing job %s on remote queue", j.ID()))
 	resp.Success = true
 	return resp, nil
 }
