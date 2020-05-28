@@ -191,7 +191,7 @@ func (m *MockDetector) Algorithm() perf.Algorithm {
 	return perf.CreateDefaultAlgorithm()
 }
 
-func (m *MockDetector) DetectChanges(ctx context.Context, series []float64) ([]int, error) {
+func (m *MockDetector) ReportUpdatedTimeSeries(ctx context.Context, series []float64) ([]int, error) {
 	m.Calls = append(m.Calls, series)
 	last := series[0]
 	cps := []int{}
@@ -217,7 +217,7 @@ func getPerformanceResultsWithChangePoints(ctx context.Context, env cedar.Enviro
 	return result
 }
 
-func extractAndValidateChangePointsFromDb(ctx context.Context, env cedar.Environment, t *testing.T, detector perf.ChangeDetector) map[string]map[string][]changePointIndexPercentChange {
+func extractAndValidateChangePointsFromDb(ctx context.Context, env cedar.Environment, t *testing.T, detector perf.PerformanceAnalysisService) map[string]map[string][]changePointIndexPercentChange {
 	result := getPerformanceResultsWithChangePoints(ctx, env, t)
 
 	var options []model.AlgorithmOption

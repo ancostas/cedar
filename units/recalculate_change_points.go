@@ -25,7 +25,7 @@ type recalculateChangePointsJob struct {
 	env                 cedar.Environment
 	conf                *model.CedarConfig
 	PerformanceResultId model.PerformanceResultSeriesID `bson:"time_series_id" json:"time_series_id" yaml:"time_series_id"`
-	changePointDetector perf.ChangeDetector
+	changePointDetector perf.PerformanceAnalysisService
 }
 
 func init() {
@@ -84,7 +84,7 @@ func (j *recalculateChangePointsJob) Run(ctx context.Context) {
 			j.AddError(errors.Wrap(err, "Unable to get cedar configuration"))
 			return
 		}
-		j.changePointDetector = perf.NewMicroServiceChangeDetector(j.conf.ChangeDetector.URI, j.conf.ChangeDetector.User, j.conf.ChangeDetector.Token, perf.CreateDefaultAlgorithm())
+		j.changePointDetector = perf.NewPerformanceAnalysisService(j.conf.ChangeDetector.URI, j.conf.ChangeDetector.User, j.conf.ChangeDetector.Token)
 	}
 	performanceData, err := model.GetPerformanceData(ctx, j.env, j.PerformanceResultId)
 	if err != nil {
@@ -95,76 +95,37 @@ func (j *recalculateChangePointsJob) Run(ctx context.Context) {
 		j.AddError(model.MarkPerformanceResultsAsAnalyzed(ctx, j.env, j.PerformanceResultId))
 		return
 	}
-	mappedChangePoints := map[string][]model.ChangePoint{}
 	for _, perfData := range performanceData.Data {
 		sort.Slice(perfData.TimeSeries, func(i, j int) bool {
 			return perfData.TimeSeries[i].Order < perfData.TimeSeries[j].Order
 		})
-		latestTriagedChangePointIndex := 0
-		for _, cp := range perfData.ChangePoints {
-			if cp.Index > latestTriagedChangePointIndex && cp.Triage.Status != model.TriageStatusUntriaged {
-				latestTriagedChangePointIndex = cp.Index
-			}
+		series := perf.TimeSeriesModel{
+			Project:     performanceData.PerformanceResultId.Project,
+			Variant:     performanceData.PerformanceResultId.Variant,
+			Task:        performanceData.PerformanceResultId.Task,
+			Test:        performanceData.PerformanceResultId.Test,
+			Measurement: perfData.Measurement,
 		}
-		floatSeries := make([]float64, len(perfData.TimeSeries)-latestTriagedChangePointIndex)
+		for k, v := range performanceData.PerformanceResultId.Arguments {
+			series.Arguments = append(series.Arguments, perf.ArgumentsModel{
+				Name:  k,
+				Value: v,
+			})
+		}
 		for i, item := range perfData.TimeSeries {
-			if i >= latestTriagedChangePointIndex {
-				floatSeries[i-latestTriagedChangePointIndex] = item.Value
-			}
+			series.Data = append(series.Data, perf.TimeSeriesDataModel{
+				PerformanceResultID: item.PerfResultID,
+				Order:               item.Order,
+				Value:               item.Value,
+				Version:             ,
+			})
 		}
 
-		result, err := j.changePointDetector.DetectChanges(ctx, floatSeries)
+		result, err := j.changePointDetector.ReportUpdatedTimeSeries(ctx, series)
 		if err != nil {
 			j.AddError(errors.Wrapf(err, "Unable to detect change points in time perfData %s", j.PerformanceResultId))
 			return
 		}
-
-		var changePoints []model.ChangePoint
-		for i, pointIndex := range result {
-			var lowerBound int
-			var upperBound int
-
-			if i == 0 {
-				lowerBound = 0
-			} else {
-				lowerBound = result[i-1]
-			}
-
-			if i == len(result)-1 {
-				upperBound = len(floatSeries)
-			} else {
-				upperBound = result[i+1]
-			}
-
-			lowerWindow := floatSeries[lowerBound:pointIndex]
-			upperWindow := floatSeries[pointIndex:upperBound]
-			percentChange := calculatePercentChange(lowerWindow, upperWindow)
-
-			mapped := model.CreateChangePoint(pointIndex+latestTriagedChangePointIndex, perfData.Measurement, j.changePointDetector.Algorithm().Name(), j.changePointDetector.Algorithm().Version(), algorithmConfigurationToOptions(j.changePointDetector.Algorithm().Configuration()), percentChange)
-			changePoints = append(changePoints, mapped)
-		}
-
-		mappedChangePoints[perfData.Measurement] = changePoints
 	}
 
-	j.AddError(model.ReplaceChangePoints(ctx, j.env, performanceData, mappedChangePoints))
-	j.AddError(model.MarkPerformanceResultsAsAnalyzed(ctx, j.env, performanceData.PerformanceResultId))
-}
-
-func calculatePercentChange(lowerWindow, upperWindow []float64) float64 {
-	avgLowerWindow := stats.Mean(lowerWindow)
-	avgUpperWindow := stats.Mean(upperWindow)
-
-	return 100 * ((avgUpperWindow / avgLowerWindow) - 1)
-}
-
-func algorithmConfigurationToOptions(configurationValues []perf.AlgorithmConfigurationValue) []model.AlgorithmOption {
-	var options []model.AlgorithmOption
-	for _, v := range configurationValues {
-		options = append(options, model.AlgorithmOption{
-			Name:  v.Name,
-			Value: v.Value,
-		})
-	}
-	return options
 }

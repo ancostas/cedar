@@ -9,140 +9,65 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
-type AlgorithmConfigurationValue struct {
-	Name  string
-	Value interface{}
+type ArgumentsModel struct {
+	Name  string      `json:"name"`
+	Value interface{} `json:"value"`
 }
 
-type Algorithm interface {
-	Name() string
-	Version() int
-	Configuration() []AlgorithmConfigurationValue
+type TimeSeriesDataModel struct {
+	PerformanceResultID string  `json:"cedar_perf_result_id"`
+	Order               int     `json:"order"`
+	Value               float64 `json:"value"`
+	Version             string  `json:"version"`
 }
 
-type eDivisiveMeans struct {
-	version      int
-	pvalue       float64
-	permutations int
+type TimeSeriesModel struct {
+	Project     string                `json:"project"`
+	Variant     string                `json:"variant"`
+	Task        string                `json:"task"`
+	Test        string                `json:"test"`
+	Measurement string                `json:"measurement"`
+	Arguments   []ArgumentsModel      `json:"args"`
+	Data        []TimeSeriesDataModel `json:"data"`
 }
 
-func (e *eDivisiveMeans) Name() string {
-	return "e_divisive_means"
+type PerformanceAnalysisService interface {
+	ReportUpdatedTimeSeries(context.Context, TimeSeriesDataModel) error
 }
 
-func (e *eDivisiveMeans) Version() int {
-	return e.version
+type performanceAnalysisAndTriageClient struct {
+	user    string
+	token   string
+	baseURL string
 }
 
-func (e *eDivisiveMeans) Configuration() []AlgorithmConfigurationValue {
-	return []AlgorithmConfigurationValue{
-		{
-			"pvalue",
-			e.pvalue,
-		},
-		{
-			"permutations",
-			int32(e.permutations),
-		},
-	}
+func NewPerformanceAnalysisService(baseURL, user string, token string) PerformanceAnalysisService {
+	return &performanceAnalysisAndTriageClient{user: user, token: token, baseURL: baseURL}
 }
 
-func CreateDefaultAlgorithm() Algorithm {
-	return &eDivisiveMeans{
-		version:      0,
-		pvalue:       0.05,
-		permutations: 100,
-	}
-}
-
-type ChangeDetector interface {
-	Algorithm() Algorithm
-	DetectChanges(context.Context, []float64) ([]int, error)
-}
-
-type jsonChangePoint struct {
-	Index     int           `json:"index"`
-	Algorithm jsonAlgorithm `json:"algorithm"`
-}
-
-type jsonAlgorithm struct {
-	Name          string                 `json:"name"`
-	Version       int                    `json:"version"`
-	Configuration map[string]interface{} `json:"configuration"`
-}
-
-type changeDetectionRequest struct {
-	Algorithm jsonAlgorithm `json:"algorithm"`
-	Series    []float64     `json:"series"`
-}
-
-type changeDetectionResponse struct {
-	ChangePoints []jsonChangePoint `json:"changePoints"`
-}
-
-type signalProcessingClient struct {
-	user      string
-	token     string
-	baseURL   string
-	algorithm Algorithm
-}
-
-func NewMicroServiceChangeDetector(baseURL, user string, token string, algorithm Algorithm) ChangeDetector {
-	return &signalProcessingClient{user: user, token: token, baseURL: baseURL, algorithm: algorithm}
-}
-
-func (spc *signalProcessingClient) Algorithm() Algorithm {
-	return spc.algorithm
-}
-
-func (spc *signalProcessingClient) DetectChanges(ctx context.Context, series []float64) ([]int, error) {
+func (spc *performanceAnalysisAndTriageClient) ReportUpdatedTimeSeries(ctx context.Context, series TimeSeriesDataModel) error {
 	startAt := time.Now()
 
-	jsonChangePoints := &changeDetectionResponse{}
-
-	if err := spc.doRequest(http.MethodPost, spc.baseURL+"/change_points/detect", ctx, spc.createRequest(series), jsonChangePoints); err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	var result []int
-	for _, point := range jsonChangePoints.ChangePoints {
-		result = append(result, point.Index)
+	if err := spc.doRequest(http.MethodPost, spc.baseURL+"/time_series/update", ctx, series); err != nil {
+		return errors.WithStack(err)
 	}
 
 	grip.Debug(message.Fields{
-		"message":        "change point detection completed",
-		"num_points":     len(series),
-		"cp_detected":    len(result),
-		"duration_secs":  time.Since(startAt).Seconds(),
-		"implementation": "MicroServiceChangePointDetector",
+		"message":       "Reported updated time series to performance analysis and triage service",
+		"update":        series,
+		"duration_secs": time.Since(startAt).Seconds(),
 	})
 
-	return result, nil
+	return nil
 }
 
-func (spc *signalProcessingClient) createRequest(series []float64) *changeDetectionRequest {
-	config := map[string]interface{}{}
-	for _, v := range spc.algorithm.Configuration() {
-		config[v.Name] = v.Value
-	}
-	return &changeDetectionRequest{
-		Series: series,
-		Algorithm: jsonAlgorithm{
-			Name:          spc.algorithm.Name(),
-			Version:       spc.algorithm.Version(),
-			Configuration: config,
-		},
-	}
-}
-
-func (spc *signalProcessingClient) doRequest(method, route string, ctx context.Context, in, out interface{}) error {
+func (spc *performanceAnalysisAndTriageClient) doRequest(method, route string, ctx context.Context, in interface{}) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return errors.WithStack(err)
@@ -197,17 +122,12 @@ func (spc *signalProcessingClient) doRequest(method, route string, ctx context.C
 
 	if resp.StatusCode != 200 {
 		grip.Warning(message.Fields{
-			"message":   "Failed to detect changes in metric data",
+			"message":   "Failed to report time series update to performance analysis and triage service",
 			"status":    http.StatusText(resp.StatusCode),
 			"url":       route,
 			"auth_user": spc.user,
 		})
-		return errors.Errorf("Failed to detect changes in metric data, status: %q, url: %q, auth_user: %q", http.StatusText(resp.StatusCode), route, spc.user)
+		return errors.Errorf("Failed to report time series update to performance analysis and triage service, status: %q, url: %q, auth_user: %q", http.StatusText(resp.StatusCode), route, spc.user)
 	}
-
-	if err = gimlet.GetJSON(resp.Body, out); err != nil {
-		return errors.WithStack(err)
-	}
-
 	return nil
 }
