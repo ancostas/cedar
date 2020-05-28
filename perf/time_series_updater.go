@@ -38,7 +38,7 @@ type TimeSeriesModel struct {
 }
 
 type PerformanceAnalysisService interface {
-	ReportUpdatedTimeSeries(context.Context, TimeSeriesDataModel) error
+	ReportUpdatedTimeSeries(context.Context, TimeSeriesModel) error
 }
 
 type performanceAnalysisAndTriageClient struct {
@@ -51,7 +51,7 @@ func NewPerformanceAnalysisService(baseURL, user string, token string) Performan
 	return &performanceAnalysisAndTriageClient{user: user, token: token, baseURL: baseURL}
 }
 
-func (spc *performanceAnalysisAndTriageClient) ReportUpdatedTimeSeries(ctx context.Context, series TimeSeriesDataModel) error {
+func (spc *performanceAnalysisAndTriageClient) ReportUpdatedTimeSeries(ctx context.Context, series TimeSeriesModel) error {
 	startAt := time.Now()
 
 	if err := spc.doRequest(http.MethodPost, spc.baseURL+"/time_series/update", ctx, series); err != nil {

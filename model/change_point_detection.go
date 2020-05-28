@@ -158,7 +158,7 @@ func MarkPerformanceResultsAsAnalyzed(ctx context.Context, env cedar.Environment
 	return nil
 }
 
-func GetPerformanceResultSeriesIdsNeedingChangePointDetection(ctx context.Context, env cedar.Environment) ([]PerformanceResultSeriesID, error) {
+func GetPerformanceResultSeriesIdsNeedingTimeSeriesUpdate(ctx context.Context, env cedar.Environment) ([]PerformanceResultSeriesID, error) {
 	cur, err := env.GetDB().Collection(perfResultCollection).Aggregate(ctx, []bson.M{
 		{
 			"$match": bson.M{
@@ -286,7 +286,7 @@ func GetPerformanceData(ctx context.Context, env cedar.Environment, performanceR
 						},
 						"order":          "$" + bsonutil.GetDottedKeyName(perfInfoKey, perfResultInfoOrderKey),
 						"perf_result_id": "$_id",
-						"version": "$" + bsonutil.GetDottedKeyName(perfInfoKey, perfResultInfoVersionKey),
+						"version":        "$" + bsonutil.GetDottedKeyName(perfInfoKey, perfResultInfoVersionKey),
 					},
 				},
 			},
